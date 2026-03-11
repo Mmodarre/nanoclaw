@@ -37,3 +37,10 @@ groups/global/*
 .nanoclaw/
 
 agents-sdk-docs
+
+# Backups
+.env.*.bak
+
+# Personal scripts
+scripts/
+telstra-receipts/
