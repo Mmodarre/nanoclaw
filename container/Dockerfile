@@ -24,7 +24,15 @@ RUN apt-get update && apt-get install -y \
     libxshmfence1 \
     curl \
     git \
+    python3 \
+    python3-pip \
+    poppler-utils \
+    qpdf \
+    tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
+
+# Install PDF Python libraries
+RUN pip install --break-system-packages pypdf pdfplumber reportlab pypdfium2 pytesseract pdf2image
 
 # Set Chromium path for agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium

@@ -2,6 +2,11 @@ import { Bot } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
+import {
+  downloadTelegramPhoto,
+  getContainerImagePath,
+  saveImageSidecar,
+} from '../image.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -165,7 +170,68 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:photo', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      const timestamp = new Date(ctx.message.date * 1000).toISOString();
+      const senderName =
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
+      const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
+      const msgId = ctx.message.message_id.toString();
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        undefined,
+        'telegram',
+        isGroup,
+      );
+
+      let imageRef: string | undefined;
+      try {
+        // Pick ~800px size (second-to-last) or largest available
+        const photos = ctx.message.photo;
+        const target =
+          photos.length >= 2
+            ? photos[photos.length - 2]
+            : photos[photos.length - 1];
+        const file = await ctx.api.getFile(target.file_id);
+        const buffer = await downloadTelegramPhoto(
+          this.botToken,
+          file.file_path!,
+        );
+        const base64 = buffer.toString('base64');
+        // Telegram photos are always JPEG
+        imageRef = saveImageSidecar(chatJid, msgId, base64, 'image/jpeg');
+      } catch (err) {
+        logger.warn(
+          { chatJid, err: (err as Error).message },
+          'Failed to download Telegram photo',
+        );
+      }
+
+      // Include container-visible path so agent can access the raw file
+      const photoTag = imageRef
+        ? `[Photo: ${getContainerImagePath(chatJid, msgId, 'image/jpeg')}]`
+        : '[Photo]';
+
+      this.opts.onMessage(chatJid, {
+        id: msgId,
+        chat_jid: chatJid,
+        sender: ctx.from?.id?.toString() || '',
+        sender_name: senderName,
+        content: `${photoTag}${caption}`,
+        timestamp,
+        is_from_me: false,
+        imageRef,
+      });
+    });
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
     this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));

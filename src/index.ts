@@ -16,6 +16,7 @@ import {
   getRegisteredChannelNames,
 } from './channels/registry.js';
 import {
+  ContainerInput,
   ContainerOutput,
   runContainerAgent,
   writeGroupsSnapshot,
@@ -45,6 +46,7 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
+import { getImageRefPath, loadImageSidecar } from './image.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
   isSenderAllowed,
@@ -164,6 +166,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   if (missedMessages.length === 0) return true;
 
+  // Enrich messages with image sidecar references
+  for (const msg of missedMessages) {
+    msg.imageRef = getImageRefPath(msg.chat_jid, msg.id) ?? undefined;
+  }
+
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
     const allowlistCfg = loadSenderAllowlist();
@@ -176,6 +183,21 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   }
 
   const prompt = formatMessages(missedMessages, TIMEZONE);
+
+  // Build images array from messages with sidecar references
+  const images: ContainerInput['images'] = [];
+  for (const msg of missedMessages) {
+    if (msg.imageRef) {
+      const sidecar = loadImageSidecar(msg.imageRef);
+      if (sidecar) {
+        images.push({
+          messageId: msg.id,
+          base64: sidecar.base64,
+          mediaType: sidecar.mediaType,
+        });
+      }
+    }
+  }
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -207,7 +229,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
+  const output = await runAgent(
+    group,
+    prompt,
+    chatJid,
+    async (result) => {
     // Streaming output callback — called for each agent result
     if (result.result) {
       const raw =
@@ -232,7 +258,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (result.status === 'error') {
       hadError = true;
     }
-  });
+    },
+    images.length ? images : undefined,
+  );
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -265,6 +293,7 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  images?: ContainerInput['images'],
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
@@ -310,6 +339,7 @@ async function runAgent(
       group,
       {
         prompt,
+        images: images?.length ? images : undefined,
         sessionId,
         groupFolder: group.folder,
         chatJid,
@@ -413,9 +443,33 @@ async function startMessageLoop(): Promise<void> {
           );
           const messagesToSend =
             allPending.length > 0 ? allPending : groupMessages;
+          // Enrich with imageRef
+          for (const msg of messagesToSend) {
+            msg.imageRef = getImageRefPath(msg.chat_jid, msg.id) ?? undefined;
+          }
           const formatted = formatMessages(messagesToSend, TIMEZONE);
+          // Build images for piped messages
+          const pipeImages: ContainerInput['images'] = [];
+          for (const msg of messagesToSend) {
+            if (msg.imageRef) {
+              const sidecar = loadImageSidecar(msg.imageRef);
+              if (sidecar) {
+                pipeImages.push({
+                  messageId: msg.id,
+                  base64: sidecar.base64,
+                  mediaType: sidecar.mediaType,
+                });
+              }
+            }
+          }
 
-          if (queue.sendMessage(chatJid, formatted)) {
+          if (
+            queue.sendMessage(
+              chatJid,
+              formatted,
+              pipeImages.length ? pipeImages : undefined,
+            )
+          ) {
             logger.debug(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',

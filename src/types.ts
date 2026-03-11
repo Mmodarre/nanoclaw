@@ -51,6 +51,7 @@ export interface NewMessage {
   timestamp: string;
   is_from_me?: boolean;
   is_bot_message?: boolean;
+  imageRef?: string; // Path to image sidecar file
 }
 
 export interface ScheduledTask {

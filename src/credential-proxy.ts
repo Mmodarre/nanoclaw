@@ -74,6 +74,25 @@ export function startCredentialProxy(
         delete headers['keep-alive'];
         delete headers['transfer-encoding'];
 
+        let model: string | undefined;
+        try {
+          if (req.method === 'POST' && body.length > 0) {
+            const parsed = JSON.parse(body.toString());
+            model = parsed.model;
+          }
+        } catch { /* ignore */ }
+        logger.info(
+          {
+            method: req.method,
+            url: req.url,
+            authMode,
+            model,
+            hasAuthHeader: !!headers['authorization'],
+            hasApiKey: !!headers['x-api-key'],
+          },
+          'Proxy request',
+        );
+
         if (authMode === 'api-key') {
           // API key mode: inject credentials on every request.
           // Send both x-api-key (Anthropic) and Authorization: Bearer

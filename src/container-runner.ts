@@ -37,6 +37,7 @@ const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 export interface ContainerInput {
   prompt: string;
+  images?: Array<{ messageId: string; base64: string; mediaType: string }>;
   sessionId?: string;
   groupFolder: string;
   chatJid: string;
@@ -195,6 +196,15 @@ function buildVolumeMounts(
       readonly: false, // MCP may need to refresh OAuth tokens
     });
   }
+
+  // Mount images directory (read-only) so agents can access saved photos
+  const imagesDir = path.join(DATA_DIR, 'images');
+  fs.mkdirSync(imagesDir, { recursive: true });
+  mounts.push({
+    hostPath: imagesDir,
+    containerPath: '/workspace/images',
+    readonly: true,
+  });
 
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
