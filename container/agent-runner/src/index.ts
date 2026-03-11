@@ -409,6 +409,8 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__gmail__*',
+        'mcp__gmail2__*',
+        'mcp__gmail3__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -427,6 +429,22 @@ async function runQuery(
         gmail: {
           command: 'npx',
           args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+        },
+        gmail2: {
+          command: 'npx',
+          args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+          env: {
+            GMAIL_OAUTH_PATH: '/home/node/.gmail-mcp-2/gcp-oauth.keys.json',
+            GMAIL_CREDENTIALS_PATH: '/home/node/.gmail-mcp-2/credentials.json',
+          },
+        },
+        gmail3: {
+          command: 'npx',
+          args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+          env: {
+            GMAIL_OAUTH_PATH: '/home/node/.gmail-mcp-3/gcp-oauth.keys.json',
+            GMAIL_CREDENTIALS_PATH: '/home/node/.gmail-mcp-3/credentials.json',
+          },
         },
       },
       hooks: {

@@ -27,6 +27,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -175,6 +176,26 @@ function buildVolumeMounts(
     });
   }
 
+  // Gmail account 2 credentials directory
+  const gmail2Dir = path.join(homeDir, '.gmail-mcp-2');
+  if (fs.existsSync(gmail2Dir)) {
+    mounts.push({
+      hostPath: gmail2Dir,
+      containerPath: '/home/node/.gmail-mcp-2',
+      readonly: false, // MCP may need to refresh OAuth tokens
+    });
+  }
+
+  // Gmail account 3 credentials directory
+  const gmail3Dir = path.join(homeDir, '.gmail-mcp-3');
+  if (fs.existsSync(gmail3Dir)) {
+    mounts.push({
+      hostPath: gmail3Dir,
+      containerPath: '/home/node/.gmail-mcp-3',
+      readonly: false, // MCP may need to refresh OAuth tokens
+    });
+  }
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
@@ -248,6 +269,20 @@ function buildContainerArgs(
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  const envPassthrough = readEnvFile([
+    'ANTHROPIC_MODEL',
+    'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS',
+  ]);
+  if (envPassthrough.ANTHROPIC_MODEL) {
+    args.push('-e', `ANTHROPIC_MODEL=${envPassthrough.ANTHROPIC_MODEL}`);
+  }
+  if (envPassthrough.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS) {
+    args.push(
+      '-e',
+      `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=${envPassthrough.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS}`,
+    );
   }
 
   // Runtime-specific args for host gateway resolution

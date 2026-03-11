@@ -15,6 +15,18 @@ import {
   RegisteredGroup,
 } from '../types.js';
 
+export interface GmailInstanceConfig {
+  credDir: string; // e.g. ~/.gmail-mcp
+  jidPrefix: string; // e.g. 'gmail' or 'gmail2'
+  channelName: string; // e.g. 'gmail' or 'gmail2'
+}
+
+const DEFAULT_CONFIG: GmailInstanceConfig = {
+  credDir: path.join(os.homedir(), '.gmail-mcp'),
+  jidPrefix: 'gmail',
+  channelName: 'gmail',
+};
+
 export interface GmailChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
@@ -29,8 +41,9 @@ interface ThreadMeta {
 }
 
 export class GmailChannel implements Channel {
-  name = 'gmail';
+  name: string;
 
+  private config: GmailInstanceConfig;
   private oauth2Client: OAuth2Client | null = null;
   private gmail: gmail_v1.Gmail | null = null;
   private opts: GmailChannelOpts;
@@ -41,19 +54,25 @@ export class GmailChannel implements Channel {
   private consecutiveErrors = 0;
   private userEmail = '';
 
-  constructor(opts: GmailChannelOpts, pollIntervalMs = 60000) {
+  constructor(
+    opts: GmailChannelOpts,
+    pollIntervalMs = 60000,
+    config = DEFAULT_CONFIG,
+  ) {
     this.opts = opts;
     this.pollIntervalMs = pollIntervalMs;
+    this.config = config;
+    this.name = config.channelName;
   }
 
   async connect(): Promise<void> {
-    const credDir = path.join(os.homedir(), '.gmail-mcp');
+    const credDir = this.config.credDir;
     const keysPath = path.join(credDir, 'gcp-oauth.keys.json');
     const tokensPath = path.join(credDir, 'credentials.json');
 
     if (!fs.existsSync(keysPath) || !fs.existsSync(tokensPath)) {
       logger.warn(
-        'Gmail credentials not found in ~/.gmail-mcp/. Skipping Gmail channel. Run /add-gmail to set up.',
+        `${this.name}: credentials not found in ${credDir}. Skipping. Run /add-gmail to set up.`,
       );
       return;
     }
@@ -76,9 +95,12 @@ export class GmailChannel implements Channel {
         const current = JSON.parse(fs.readFileSync(tokensPath, 'utf-8'));
         Object.assign(current, newTokens);
         fs.writeFileSync(tokensPath, JSON.stringify(current, null, 2));
-        logger.debug('Gmail OAuth tokens refreshed');
+        logger.debug(`${this.name}: OAuth tokens refreshed`);
       } catch (err) {
-        logger.warn({ err }, 'Failed to persist refreshed Gmail tokens');
+        logger.warn(
+          { err },
+          `${this.name}: failed to persist refreshed tokens`,
+        );
       }
     });
 
@@ -87,13 +109,17 @@ export class GmailChannel implements Channel {
     // Verify connection
     const profile = await this.gmail.users.getProfile({ userId: 'me' });
     this.userEmail = profile.data.emailAddress || '';
-    logger.info({ email: this.userEmail }, 'Gmail channel connected');
+    logger.info({ email: this.userEmail }, `${this.name} channel connected`);
 
     // Start polling with error backoff
     const schedulePoll = () => {
-      const backoffMs = this.consecutiveErrors > 0
-        ? Math.min(this.pollIntervalMs * Math.pow(2, this.consecutiveErrors), 30 * 60 * 1000)
-        : this.pollIntervalMs;
+      const backoffMs =
+        this.consecutiveErrors > 0
+          ? Math.min(
+              this.pollIntervalMs * Math.pow(2, this.consecutiveErrors),
+              30 * 60 * 1000,
+            )
+          : this.pollIntervalMs;
       this.pollTimer = setTimeout(() => {
         this.pollForMessages()
           .catch((err) => logger.error({ err }, 'Gmail poll error'))
@@ -110,11 +136,11 @@ export class GmailChannel implements Channel {
 
   async sendMessage(jid: string, text: string): Promise<void> {
     if (!this.gmail) {
-      logger.warn('Gmail not initialized');
+      logger.warn(`${this.name}: not initialized`);
       return;
     }
 
-    const threadId = jid.replace(/^gmail:/, '');
+    const threadId = jid.slice(this.config.jidPrefix.length + 1);
     const meta = this.threadMeta.get(threadId);
 
     if (!meta) {
@@ -151,9 +177,9 @@ export class GmailChannel implements Channel {
           threadId,
         },
       });
-      logger.info({ to: meta.sender, threadId }, 'Gmail reply sent');
+      logger.info({ to: meta.sender, threadId }, `${this.name}: reply sent`);
     } catch (err) {
-      logger.error({ jid, err }, 'Failed to send Gmail reply');
+      logger.error({ jid, err }, `${this.name}: failed to send reply`);
     }
   }
 
@@ -162,7 +188,7 @@ export class GmailChannel implements Channel {
   }
 
   ownsJid(jid: string): boolean {
-    return jid.startsWith('gmail:');
+    return jid.startsWith(this.config.jidPrefix + ':');
   }
 
   async disconnect(): Promise<void> {
@@ -172,7 +198,7 @@ export class GmailChannel implements Channel {
     }
     this.gmail = null;
     this.oauth2Client = null;
-    logger.info('Gmail channel stopped');
+    logger.info(`${this.name} channel stopped`);
   }
 
   // --- Private ---
@@ -210,8 +236,18 @@ export class GmailChannel implements Channel {
       this.consecutiveErrors = 0;
     } catch (err) {
       this.consecutiveErrors++;
-      const backoffMs = Math.min(this.pollIntervalMs * Math.pow(2, this.consecutiveErrors), 30 * 60 * 1000);
-      logger.error({ err, consecutiveErrors: this.consecutiveErrors, nextPollMs: backoffMs }, 'Gmail poll failed');
+      const backoffMs = Math.min(
+        this.pollIntervalMs * Math.pow(2, this.consecutiveErrors),
+        30 * 60 * 1000,
+      );
+      logger.error(
+        {
+          err,
+          consecutiveErrors: this.consecutiveErrors,
+          nextPollMs: backoffMs,
+        },
+        `${this.name}: poll failed`,
+      );
     }
   }
 
@@ -253,7 +289,7 @@ export class GmailChannel implements Channel {
       return;
     }
 
-    const chatJid = `gmail:${threadId}`;
+    const chatJid = `${this.config.jidPrefix}:${threadId}`;
 
     // Cache thread metadata for replies
     this.threadMeta.set(threadId, {
@@ -264,28 +300,51 @@ export class GmailChannel implements Channel {
     });
 
     // Store chat metadata for group discovery
-    this.opts.onChatMetadata(chatJid, timestamp, subject, 'gmail', false);
-
-    // Find the main group to deliver the email notification
-    const groups = this.opts.registeredGroups();
-    const mainEntry = Object.entries(groups).find(
-      ([, g]) => g.isMain === true,
+    this.opts.onChatMetadata(
+      chatJid,
+      timestamp,
+      subject,
+      this.config.channelName,
+      false,
     );
 
-    if (!mainEntry) {
+    // Find the target group to deliver the email notification.
+    // gmail3 emails route to the expense-assistant group if registered;
+    // all others route to the main group.
+    const groups = this.opts.registeredGroups();
+    let targetJid: string | undefined;
+
+    if (this.config.channelName === 'gmail3') {
+      const expenseEntry = Object.entries(groups).find(
+        ([, g]) => g.folder === 'telegram_expense-assistant',
+      );
+      targetJid = expenseEntry?.[0];
+    }
+
+    if (!targetJid) {
+      const mainEntry = Object.entries(groups).find(
+        ([, g]) => g.isMain === true,
+      );
+      targetJid = mainEntry?.[0];
+    }
+
+    if (!targetJid) {
       logger.debug(
         { chatJid, subject },
-        'No main group registered, skipping email',
+        'No target group registered, skipping email',
       );
       return;
     }
 
-    const mainJid = mainEntry[0];
-    const content = `[Email from ${senderName} <${senderEmail}>]\nSubject: ${subject}\n\n${body}`;
+    const label =
+      this.config.channelName === 'gmail'
+        ? ''
+        : ` (${this.config.channelName})`;
+    const content = `[Email${label} from ${senderName} <${senderEmail}>]\nSubject: ${subject}\n\n${body}`;
 
-    this.opts.onMessage(mainJid, {
+    this.opts.onMessage(targetJid, {
       id: messageId,
-      chat_jid: mainJid,
+      chat_jid: targetJid,
       sender: senderEmail,
       sender_name: senderName,
       content,
@@ -305,8 +364,8 @@ export class GmailChannel implements Channel {
     }
 
     logger.info(
-      { mainJid, from: senderName, subject },
-      'Gmail email delivered to main group',
+      { targetJid, from: senderName, subject },
+      `${this.name}: email delivered to group`,
     );
   }
 
@@ -340,13 +399,53 @@ export class GmailChannel implements Channel {
 }
 
 registerChannel('gmail', (opts: ChannelOpts) => {
-  const credDir = path.join(os.homedir(), '.gmail-mcp');
+  const config = DEFAULT_CONFIG;
   if (
-    !fs.existsSync(path.join(credDir, 'gcp-oauth.keys.json')) ||
-    !fs.existsSync(path.join(credDir, 'credentials.json'))
+    !fs.existsSync(path.join(config.credDir, 'gcp-oauth.keys.json')) ||
+    !fs.existsSync(path.join(config.credDir, 'credentials.json'))
   ) {
-    logger.warn('Gmail: credentials not found in ~/.gmail-mcp/');
+    logger.warn(
+      `${config.channelName}: credentials not found in ${config.credDir}`,
+    );
     return null;
   }
-  return new GmailChannel(opts);
+  return new GmailChannel(opts, 60000, config);
+});
+
+const GMAIL2_CONFIG: GmailInstanceConfig = {
+  credDir: path.join(os.homedir(), '.gmail-mcp-2'),
+  jidPrefix: 'gmail2',
+  channelName: 'gmail2',
+};
+
+registerChannel('gmail2', (opts: ChannelOpts) => {
+  if (
+    !fs.existsSync(path.join(GMAIL2_CONFIG.credDir, 'gcp-oauth.keys.json')) ||
+    !fs.existsSync(path.join(GMAIL2_CONFIG.credDir, 'credentials.json'))
+  ) {
+    logger.warn(
+      `${GMAIL2_CONFIG.channelName}: credentials not found in ${GMAIL2_CONFIG.credDir}`,
+    );
+    return null;
+  }
+  return new GmailChannel(opts, 60000, GMAIL2_CONFIG);
+});
+
+const GMAIL3_CONFIG: GmailInstanceConfig = {
+  credDir: path.join(os.homedir(), '.gmail-mcp-3'),
+  jidPrefix: 'gmail3',
+  channelName: 'gmail3',
+};
+
+registerChannel('gmail3', (opts: ChannelOpts) => {
+  if (
+    !fs.existsSync(path.join(GMAIL3_CONFIG.credDir, 'gcp-oauth.keys.json')) ||
+    !fs.existsSync(path.join(GMAIL3_CONFIG.credDir, 'credentials.json'))
+  ) {
+    logger.warn(
+      `${GMAIL3_CONFIG.channelName}: credentials not found in ${GMAIL3_CONFIG.credDir}`,
+    );
+    return null;
+  }
+  return new GmailChannel(opts, 60000, GMAIL3_CONFIG);
 });
