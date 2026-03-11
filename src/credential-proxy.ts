@@ -32,6 +32,7 @@ export function startCredentialProxy(
     'CLAUDE_CODE_OAUTH_TOKEN',
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_CUSTOM_HEADERS',
   ]);
 
   const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
@@ -43,6 +44,17 @@ export function startCredentialProxy(
   );
   const isHttps = upstreamUrl.protocol === 'https:';
   const makeRequest = isHttps ? httpsRequest : httpRequest;
+
+  const customHeaders: Record<string, string> = {};
+  if (secrets.ANTHROPIC_CUSTOM_HEADERS) {
+    for (const part of secrets.ANTHROPIC_CUSTOM_HEADERS.split(',')) {
+      const colonIdx = part.indexOf(':');
+      if (colonIdx === -1) continue;
+      const key = part.slice(0, colonIdx).trim().toLowerCase();
+      const value = part.slice(colonIdx + 1).trim();
+      if (key) customHeaders[key] = value;
+    }
+  }
 
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
@@ -63,9 +75,13 @@ export function startCredentialProxy(
         delete headers['transfer-encoding'];
 
         if (authMode === 'api-key') {
-          // API key mode: inject x-api-key on every request
+          // API key mode: inject credentials on every request.
+          // Send both x-api-key (Anthropic) and Authorization: Bearer
+          // (Databricks/other providers) so the proxy works with any upstream.
           delete headers['x-api-key'];
+          delete headers['authorization'];
           headers['x-api-key'] = secrets.ANTHROPIC_API_KEY;
+          headers['authorization'] = `Bearer ${secrets.ANTHROPIC_API_KEY}`;
         } else {
           // OAuth mode: replace placeholder Bearer token with the real one
           // only when the container actually sends an Authorization header
@@ -79,11 +95,15 @@ export function startCredentialProxy(
           }
         }
 
+        for (const [key, value] of Object.entries(customHeaders)) {
+          headers[key] = value;
+        }
+
         const upstream = makeRequest(
           {
             hostname: upstreamUrl.hostname,
             port: upstreamUrl.port || (isHttps ? 443 : 80),
-            path: req.url,
+            path: upstreamUrl.pathname.replace(/\/$/, '') + req.url,
             method: req.method,
             headers,
           } as RequestOptions,
