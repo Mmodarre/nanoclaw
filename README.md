@@ -16,6 +16,14 @@ Using Claude Code, NanoClaw can dynamically rewrite its code to customize its fe
 
 **New:** First AI assistant to support [Agent Swarms](https://code.claude.com/docs/en/agent-teams). Spin up teams of agents that collaborate in your chat.
 
+## Fork Additions
+
+This fork extends NanoClaw with:
+
+- **Databricks Model Serving** — Route to Azure Databricks or any Claude-API-compatible endpoint via `ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS`
+- **Multi-Account Gmail** — Three independent Gmail accounts with separate OAuth credentials and per-account routing to different groups (e.g., route a specific inbox to an expense-assistant)
+- **Credential Proxy** — A host-side HTTP proxy that injects API keys and tokens at request time, so containers never see real credentials in their environment
+
 ## Why I Built NanoClaw
 
 [OpenClaw](https://github.com/openclaw/openclaw) is an impressive project, but I wouldn't have been able to sleep if I had given complex software I didn't understand full access to my life. OpenClaw has nearly half a million lines of code, 53 config files, and 70+ dependencies. Its security is at the application level (allowlists, pairing codes) rather than true OS-level isolation. Everything runs in one Node process with shared memory.
